@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gmail 篩選器編輯器</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📬</text></svg>">
+<script>
+// 在畫面繪製前套用主題，避免閃一下另一種顏色
+try { const t = JSON.parse(localStorage.getItem("gfe.theme")); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+/* 主題：data-theme 未設定 = 跟隨系統；"light" / "dark" = 手動指定 */
+:root {
+  --bg: #f6f7f9; --panel: #fff; --fg: #1d2330; --muted: #6b7385; --border: #dde1e8;
+  --accent: #1a73e8; --accent-fg: #fff; --danger: #d93025; --sel: #e8f0fe; --chip: #eef1f5;
+  --warn: #b06000;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15181e; --panel: #1e222a; --fg: #e4e7ee; --muted: #9098aa; --border: #333a47;
+    --accent: #8ab4f8; --accent-fg: #10131a; --danger: #f28b82; --sel: #263452; --chip: #2a303b;
+    --warn: #fdd663;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15181e; --panel: #1e222a; --fg: #e4e7ee; --muted: #9098aa; --border: #333a47;
+  --accent: #8ab4f8; --accent-fg: #10131a; --danger: #f28b82; --sel: #263452; --chip: #2a303b;
+  --warn: #fdd663;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, "Segoe UI", "Microsoft JhengHei", sans-serif; display: flex; flex-direction: column; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+header h1 { font-size: 16px; margin: 0 12px 0 0; }
+#fileInfo { color: var(--muted); font-size: 13px; margin-left: auto; }
+#fileInfo .dirty { color: var(--warn); font-weight: 600; }
+[hidden] { display: none !important; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+.emo { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; font-style: normal; line-height: 1; flex: none; }
+button .emo { font-size: 15px; }
+button.icon-only { padding: 6px 8px; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--fg); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+button:disabled { opacity: .45; cursor: default; }
+main { flex: 1; display: grid; grid-template-columns: var(--listW, 380px) 6px minmax(0, 1fr); min-height: 0; }
+#listPane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#splitter { cursor: col-resize; background: var(--border); background-clip: content-box; padding: 0 2px; touch-action: none; }
+#splitter:hover, body.resizing #splitter { background: var(--accent); background-clip: content-box; padding: 0 1px; }
+body.resizing { cursor: col-resize; user-select: none; }
+#listTools { padding: 10px; display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
+#listTools2 { padding: 0 10px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+#listTools2 button { padding: 3px 9px; font-size: 12.5px; }
+button.toggle[aria-pressed=true] { background: var(--sel); border-color: var(--accent); color: var(--accent); }
+#listTools2 .sep { flex: 1; }
+#list.oneline-crit .crit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; }
+#list.oneline-acts .acts { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#list.oneline-acts .acts .chip { display: inline-block; margin-right: 4px; }
+.folder { display: flex; align-items: center; gap: 6px; padding: 6px 12px 6px 8px; border-bottom: 1px solid var(--border); cursor: pointer; font-weight: 600; user-select: none; background: var(--panel); }
+.folder:hover { background: var(--chip); }
+.folder .caret { display: inline-block; width: 12px; color: var(--muted); font-size: 11px; transition: transform .12s; }
+.folder[aria-expanded=true] .caret { transform: rotate(90deg); }
+.folder .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder .fcount { font-size: 11.5px; font-weight: 400; color: var(--muted); background: var(--chip); padding: 0 7px; border-radius: 10px; }
+#list.tree .chip.label { display: none; }
+.item[draggable=true] { cursor: grab; }
+.item.dragging { opacity: .4; }
+.item.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+.item.drop-after { box-shadow: inset 0 -3px 0 var(--accent); }
+#search { flex: 1; }
+input[type=text], input[type=number], select { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--fg); width: 100%; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#list { overflow-y: auto; flex: 1; }
+.item { padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.item:hover { background: var(--chip); }
+.item.sel { background: var(--sel); }
+.item .crit { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+.item .acts { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: var(--chip); color: var(--muted); }
+.chip.label { color: var(--accent); }
+.chip .emo { font-size: 12px; margin-right: 3px; }
+#count { padding: 6px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+#editPane { overflow-y: auto; padding: 18px 24px; }
+#empty { color: var(--muted); margin-top: 60px; text-align: center; }
+fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px 14px; margin: 0 0 16px; background: var(--panel); }
+legend { padding: 0 6px; font-weight: 600; }
+.row { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; align-items: center; margin: 6px 0; }
+.row label { color: var(--muted); }
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; }
+.checks label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.size { display: flex; gap: 6px; }
+.size select { width: auto; }
+#query { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; background: var(--chip); padding: 8px 10px; border-radius: 6px; word-break: break-all; min-height: 34px; }
+.editActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.meta { color: var(--muted); font-size: 12px; margin-top: 10px; word-break: break-all; }
+#dropHint { position: fixed; inset: 0; background: color-mix(in srgb, var(--accent) 20%, transparent); border: 3px dashed var(--accent); display: none; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; z-index: 10; pointer-events: none; }
+body.dragging #dropHint { display: flex; }
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#toast.show { opacity: 1; }
+.tip { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 11px; font-weight: 700; background: var(--chip); color: var(--muted); border: 1px solid var(--border); cursor: help; vertical-align: 1px; user-select: none; }
+.tip:hover, .tip:focus { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); outline: none; }
+#tipBox { position: fixed; z-index: 20; max-width: min(440px, calc(100vw - 32px)); background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 10px 12px; font-size: 13px; line-height: 1.55; display: none; pointer-events: none; }
+#tipBox.show { display: block; }
+#tipBox b { color: var(--accent); }
+#tipBox code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--chip); padding: 0 4px; border-radius: 4px; white-space: nowrap; }
+#tipBox ul { margin: 4px 0 0; padding-left: 18px; }
+#tipBox .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }
+  #listPane { border-bottom: 1px solid var(--border); }
+  #splitter { display: none; }
+  #editPane { padding: 12px 16px; }
+  .row { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="emo">📬</span> Gmail 篩選器編輯器</h1>
+  <button id="btnOpen" class="primary">開啟 XML</button>
+  <button id="btnSave" disabled title="直接覆寫原檔（Chrome / Edge）">儲存</button>
+  <button id="btnSaveAs" disabled>另存新檔</button>
+  <input type="file" id="fileInput" accept=".xml,application/xml,text/xml" hidden>
+  <span id="fileInfo">尚未開啟檔案（也可把 XML 拖進視窗）</span>
+  <button id="btnTheme" title="切換主題"></button>
+</header>
+<main>
+  <section id="listPane">
+    <div id="listTools">
+      <input type="text" id="search" placeholder="搜尋條件或標籤…">
+      <select id="sort" style="width:auto" title="顯示排序（不影響檔案）">
+        <option value="file">原始順序</option>
+        <option value="label">依標籤</option>
+        <option value="from">依寄件者</option>
+      </select>
+      <button id="btnNew" class="icon-only" disabled title="新增篩選器" aria-label="新增篩選器"></button>
+    </div>
+    <div id="listTools2">
+      <button id="tglCrit" class="toggle" aria-pressed="false" title="條件超過一行時以 … 省略">條件單行</button>
+      <button id="tglActs" class="toggle" aria-pressed="false" title="標籤／動作超過一行時以 … 省略">標籤單行</button>
+      <button id="tglTree" class="toggle" aria-pressed="false" title="依標籤的 / 分層顯示，可收合">樹狀</button>
+      <button id="btnExpand" hidden title="全部展開">全展開</button>
+      <button id="btnCollapse" hidden title="全部收合">全收合</button>
+      <span class="sep"></span>
+      <button id="btnApplySort" hidden title="把目前的顯示排序寫入原始順序（存檔時生效）">套用為原始順序</button>
+    </div>
+    <div id="list"></div>
+    <div id="count"></div>
+  </section>
+  <div id="splitter" role="separator" aria-orientation="vertical" title="拖動調整寬度，雙擊還原"></div>
+  <section id="editPane"><div id="empty">開啟 mailFilters.xml 後，從左側選擇篩選器進行編輯。<br><br>或按「開啟 XML」旁先按 ＋ 從空白開始。</div></section>
+</main>
+<div id="dropHint">放開以載入 XML</div>
+<div id="toast"></div>
+<div id="tipBox" role="tooltip"></div>
+<datalist id="labelList"></datalist>
+
+<template id="editorTpl">
+  <fieldset>
+    <legend>條件 <span class="tip" data-tip="general">?</span></legend>
+    <div class="row"><label>寄件者 (from) <span class="tip" data-tip="from">?</span></label><input type="text" data-k="from"></div>
+    <div class="row"><label>收件者 (to) <span class="tip" data-tip="to">?</span></label><input type="text" data-k="to"></div>
+    <div class="row"><label>主旨 (subject) <span class="tip" data-tip="subject">?</span></label><input type="text" data-k="subject"></div>
+    <div class="row"><label>包含字詞 <span class="tip" data-tip="hasTheWord">?</span></label><input type="text" data-k="hasTheWord"></div>
+    <div class="row"><label>不包含字詞 <span class="tip" data-tip="doesNotHaveTheWord">?</span></label><input type="text" data-k="doesNotHaveTheWord"></div>
+    <div class="row"><label>大小 <span class="tip" data-tip="size">?</span></label>
+      <div class="size">
+        <select data-k="sizeOperator"><option value="s_sl">大於</option><option value="s_ss">小於</option></select>
+        <input type="number" min="0" data-k="size" placeholder="(不限)">
+        <select data-k="sizeUnit"><option value="s_smb">MB</option><option value="s_skb">KB</option><option value="s_sb">Bytes</option></select>
+      </div>
+    </div>
+    <div class="checks" style="margin-top:8px">
+      <label><input type="checkbox" data-k="hasAttachment"> 含有附件</label>
+      <label><input type="checkbox" data-k="excludeChats"> 不包含即時通訊</label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>動作 <span class="tip" data-tip="actions">?</span></legend>
+    <div class="checks">
+      <label><input type="checkbox" data-k="shouldArchive"> 略過收件匣（封存）</label>
+      <label><input type="checkbox" data-k="shouldMarkAsRead"> 標示為已讀取</label>
+      <label><input type="checkbox" data-k="shouldStar"> 加上星號</label>
+      <label><input type="checkbox" data-k="shouldTrash"> 刪除</label>
+      <label><input type="checkbox" data-k="shouldNeverSpam"> 永不傳送到垃圾郵件</label>
+      <label><input type="checkbox" data-k="shouldAlwaysMarkAsImportant"> 一律標示為重要</label>
+      <label><input type="checkbox" data-k="shouldNeverMarkAsImportant"> 一律不標示為重要</label>
+    </div>
+    <div class="row" style="margin-top:10px"><label>套用標籤 <span class="tip" data-tip="label">?</span></label><input type="text" data-k="label" list="labelList" placeholder="例如 Bank/Notify"></div>
+    <div class="row"><label>分類 <span class="tip" data-tip="smartLabelToApply">?</span></label>
+      <select data-k="smartLabelToApply">
+        <option value="">(不分類)</option>
+        <option value="^smartlabel_personal">主要</option>
+        <option value="^smartlabel_social">社交網路</option>
+        <option value="^smartlabel_promo">促銷內容</option>
+        <option value="^smartlabel_notification">最新快訊</option>
+        <option value="^smartlabel_group">論壇</option>
+      </select>
+    </div>
+    <div class="row"><label>轉寄至 <span class="tip" data-tip="forwardTo">?</span></label><input type="text" data-k="forwardTo" placeholder="需先在 Gmail 設定中驗證轉寄地址"></div>
+  </fieldset>
+  <fieldset>
+    <legend>等效 Gmail 搜尋</legend>
+    <div id="query"></div>
+  </fieldset>
+  <div class="editActions">
+    <button id="btnDup">複製此篩選器</button>
+    <button id="btnUp">上移</button>
+    <button id="btnDown">下移</button>
+    <button id="btnDel" class="danger">刪除</button>
+  </div>
+  <div class="meta" id="meta"></div>
+</template>
+
+<script>
+"use strict";
+const NS_ATOM = "http://www.w3.org/2005/Atom";
+const NS_APPS = "http://schemas.google.com/apps/2006";
+const BOOL_KEYS = ["hasAttachment","excludeChats","shouldArchive","shouldMarkAsRead","shouldStar","shouldTrash",
+  "shouldNeverSpam","shouldAlwaysMarkAsImportant","shouldNeverMarkAsImportant"];
+// Gmail 匯出的屬性順序：條件 → 動作 → sizeOperator/sizeUnit
+const ORDER = ["from","to","subject","hasTheWord","doesNotHaveTheWord","hasAttachment","excludeChats","size",
+  "label","shouldMarkAsRead","shouldArchive","shouldStar","shouldTrash","shouldNeverSpam",
+  "shouldAlwaysMarkAsImportant","shouldNeverMarkAsImportant","smartLabelToApply","forwardTo",
+  "sizeOperator","sizeUnit"];
+const KNOWN = new Set(ORDER);
+const SMART = {"^smartlabel_personal":"主要","^smartlabel_social":"社交","^smartlabel_promo":"促銷",
+  "^smartlabel_notification":"快訊","^smartlabel_group":"論壇"};
+const ACT_TEXT = {shouldArchive:"封存",shouldMarkAsRead:"已讀",shouldStar:"星號",shouldTrash:"刪除",
+  shouldNeverSpam:"非垃圾",shouldAlwaysMarkAsImportant:"重要",shouldNeverMarkAsImportant:"不重要"};
+
+const state = { filters: [], selected: null, dirty: false, fileName: "mailFilters.xml", handle: null,
+  feedTitle: "Mail Filters", author: null };
+const $ = s => document.querySelector(s);
+/* 偏好設定（存在此瀏覽器，讀寫失敗就用預設） */
+const pref = {
+  get(k, d) { try { const v = localStorage.getItem("gfe." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("gfe." + k, JSON.stringify(v)); } catch {} },
+};
+
+/* ---------- 解析 ---------- */
+function parseXml(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.querySelector("parsererror")) throw new Error("XML 格式錯誤");
+  const feed = doc.documentElement;
+  if (feed.localName !== "feed") throw new Error("不是 Gmail 篩選器匯出檔（找不到 <feed>）");
+  const child = (el, name) => [...el.children].find(c => c.localName === name && c.namespaceURI === NS_ATOM);
+  const author = child(feed, "author");
+  state.author = author ? { name: child(author, "name")?.textContent ?? "", email: child(author, "email")?.textContent ?? "" } : null;
+  state.feedTitle = child(feed, "title")?.textContent || "Mail Filters";
+  const filters = [];
+  for (const entry of feed.children) {
+    if (entry.localName !== "entry") continue;
+    const f = newFilter(child(entry, "id")?.textContent);
+    f.updated = child(entry, "updated")?.textContent || "";
+    for (const p of entry.getElementsByTagNameNS(NS_APPS, "property")) {
+      const n = p.getAttribute("name"), v = p.getAttribute("value") ?? "";
+      if (KNOWN.has(n)) f.p[n] = v; else f.extra.push([n, v]);
+    }
+    filters.push(f);
+  }
+  return filters;
+}
+
+let uidSeq = 0;
+function newFilter(id) {
+  return { uid: ++uidSeq, id: id || genId(), updated: "", p: { sizeOperator: "s_sl", sizeUnit: "s_smb" }, extra: [] };
+}
+function genId() {
+  let r = ""; for (let i = 0; i < 19; i++) r += Math.floor(Math.random() * 10);
+  return "tag:mail.google.com,2008:filter:z" + String(Date.now()).padStart(19, "0") + "*" + r;
+}
+
+/* ---------- 輸出 ---------- */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/'/g,"&apos;").replace(/"/g,"&quot;");
+function serialize() {
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const ids = state.filters.map(f => f.id.replace(/^.*:filter:/, "")).join(",");
+  let out = "<?xml version='1.0' encoding='UTF-8'?>\n<feed xmlns='" + NS_ATOM + "' xmlns:apps='" + NS_APPS + "'>\n";
+  out += "\t<title>" + esc(state.feedTitle) + "</title>\n";
+  out += "\t<id>tag:mail.google.com,2008:filters:" + esc(ids) + "</id>\n";
+  out += "\t<updated>" + now + "</updated>\n";
+  if (state.author) out += "\t<author>\n\t\t<name>" + esc(state.author.name) + "</name>\n\t\t<email>" + esc(state.author.email) + "</email>\n\t</author>\n";
+  for (const f of state.filters) {
+    out += "\t<entry>\n\t\t<category term='filter'></category>\n\t\t<title>Mail Filter</title>\n";
+    out += "\t\t<id>" + esc(f.id) + "</id>\n\t\t<updated>" + (f.updated || now) + "</updated>\n\t\t<content></content>\n";
+    for (const k of ORDER) {
+      const v = f.p[k];
+      if (v === undefined || v === "") continue;
+      out += "\t\t<apps:property name='" + k + "' value='" + esc(v) + "'/>\n";
+    }
+    for (const [n, v] of f.extra) out += "\t\t<apps:property name='" + esc(n) + "' value='" + esc(v) + "'/>\n";
+    out += "\t</entry>\n";
+  }
+  return out + "</feed>";
+}
+
+/* ---------- 檔案 I/O ---------- */
+// iframe（例如 VS Code 預覽）內呼叫 File System Access API 會丟 SecurityError，只在頂層視窗使用
+const inTop = (() => { try { return window.self === window.top; } catch { return false; } })();
+const hasFS = inTop && "showOpenFilePicker" in window;
+const canSavePicker = inTop && "showSaveFilePicker" in window;
+const PICK = { types: [{ description: "Gmail 篩選器 XML", accept: { "application/xml": [".xml"] } }] };
+
+async function openFile() {
+  if (state.dirty && !confirm("目前有未儲存的變更，確定要開啟其他檔案？")) return;
+  if (hasFS) {
+    try {
+      const [h] = await showOpenFilePicker(PICK);
+      loadText(await (await h.getFile()).text(), h.name, h);
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      console.warn("showOpenFilePicker 失敗，改用一般檔案選擇：", e);
+      $("#fileInput").click();
+    }
+  } else $("#fileInput").click();
+}
+function loadText(text, name, handle) {
+  try {
+    state.filters = parseXml(text);
+    state.fileName = name; state.handle = handle || null; state.selected = null;
+    setDirty(false); render(); toast("已載入 " + state.filters.length + " 個篩選器");
+  } catch (e) { alert("無法讀取：" + e.message); }
+}
+async function save() {
+  if (!state.handle) return saveAs();
+  try {
+    if ((await state.handle.queryPermission({ mode: "readwrite" })) !== "granted" &&
+        (await state.handle.requestPermission({ mode: "readwrite" })) !== "granted") return;
+    const w = await state.handle.createWritable();
+    await w.write(serialize()); await w.close();
+    setDirty(false); toast("已儲存至 " + state.fileName);
+  } catch (e) { toast("儲存失敗：" + e.message); }
+}
+async function saveAs() {
+  const text = serialize();
+  if (canSavePicker) {
+    try {
+      const h = await showSaveFilePicker({ ...PICK, suggestedName: state.fileName });
+      const w = await h.createWritable(); await w.write(text); await w.close();
+      state.handle = h; state.fileName = h.name; setDirty(false); toast("已另存為 " + h.name);
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      console.warn("showSaveFilePicker 失敗，改用下載：", e);
+    }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/xml" }));
+  a.download = state.fileName; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setDirty(false); toast("已下載 " + state.fileName);
+}
+
+/* ---------- 顯示 ---------- */
+function gmailQuery(p) {
+  const q = [];
+  const wrap = (k, v) => v ? q.push(k + ":(" + v + ")") : 0;
+  wrap("from", p.from); wrap("to", p.to); wrap("subject", p.subject);
+  if (p.hasTheWord) q.push(p.hasTheWord);
+  if (p.doesNotHaveTheWord) q.push("-{" + p.doesNotHaveTheWord + "}");
+  if (p.hasAttachment === "true") q.push("has:attachment");
+  if (p.excludeChats === "true") q.push("-in:chats");
+  if (p.size) q.push((p.sizeOperator === "s_ss" ? "smaller:" : "larger:") + p.size + ({ s_smb: "M", s_skb: "K" }[p.sizeUnit] || ""));
+  return q.join(" ");
+}
+function summary(f) {
+  const acts = [];
+  if (f.p.label) acts.push(["label", f.p.label]);
+  for (const k in ACT_TEXT) if (f.p[k] === "true") acts.push(["", ACT_TEXT[k]]);
+  if (f.p.smartLabelToApply) acts.push(["", "分類:" + (SMART[f.p.smartLabelToApply] || f.p.smartLabelToApply)]);
+  if (f.p.forwardTo) acts.push(["", "轉寄"]);
+  return acts;
+}
+// 排序：主鍵 → 次鍵 → 原始順序（穩定排序）。空值排最後；數字前綴（如 "05." "007."）依數值比較
+const collator = new Intl.Collator("zh-Hant", { numeric: true, sensitivity: "base" });
+const SORT_KEYS = { label: ["label", "from", "subject"], from: ["from", "label", "subject"] };
+function sortFilters(arr, mode) {
+  const keys = SORT_KEYS[mode]; if (!keys) return arr;
+  const pos = new Map(state.filters.map((f, i) => [f, i]));
+  return [...arr].sort((a, b) => {
+    for (const k of keys) {
+      const x = a.p[k] || "", y = b.p[k] || "";
+      if (!x !== !y) return x ? -1 : 1;
+      const c = collator.compare(x, y); if (c) return c;
+    }
+    return pos.get(a) - pos.get(b);
+  });
+}
+function visibleFilters() {
+  const kw = $("#search").value.trim().toLowerCase();
+  const arr = state.filters.filter(f => !kw || Object.values(f.p).join(" ").toLowerCase().includes(kw));
+  return sortFilters(arr, $("#sort").value);
+}
+// 只有在「原始順序＋未搜尋」時，畫面順序才等於檔案順序，才允許拖曳
+const isTree = () => $("#tglTree").getAttribute("aria-pressed") === "true";
+const canDrag = () => $("#sort").value === "file" && !$("#search").value.trim() && !isTree();
+let dragSrc = null;
+const clearDropMarks = () => document.querySelectorAll(".drop-before,.drop-after").forEach(x => x.classList.remove("drop-before", "drop-after"));
+
+/* 樹狀：依標籤的 "/" 分層 */
+const NO_LABEL = "(無標籤)";
+function buildTree(filters) {
+  const root = { name: "", path: "", children: new Map(), filters: [], total: 0 };
+  for (const f of filters) {
+    let node = root; node.total++;
+    const parts = f.p.label ? f.p.label.split("/") : [NO_LABEL];
+    parts.forEach((name, i) => {
+      const path = parts.slice(0, i + 1).join("/");
+      if (!node.children.has(name)) node.children.set(name, { name, path, children: new Map(), filters: [], total: 0 });
+      node = node.children.get(name); node.total++;
+    });
+    node.filters.push(f);
+  }
+  return root;
+}
+const sortedChildren = node => [...node.children.values()].sort((a, b) =>
+  (a.name === NO_LABEL) - (b.name === NO_LABEL) || collator.compare(a.name, b.name));
+function renderTree(container, node, depth, forceOpen) {
+  for (const child of sortedChildren(node)) {
+    const open = forceOpen || !state.collapsed.has(child.path);
+    const row = document.createElement("div");
+    row.className = "folder"; row.style.paddingLeft = (8 + depth * 16) + "px";
+    row.setAttribute("aria-expanded", open);
+    row.innerHTML = `<span class="caret">▸</span>${emo(open ? "📂" : "📁")}<span class="fname"></span><span class="fcount">${child.total}</span>`;
+    row.querySelector(".fname").textContent = child.name;
+    row.title = child.path;
+    row.onclick = () => {
+      if (forceOpen) return;
+      state.collapsed.has(child.path) ? state.collapsed.delete(child.path) : state.collapsed.add(child.path);
+      pref.set("collapsed", [...state.collapsed]); renderList();
+    };
+    container.append(row);
+    if (!open) continue;
+    for (const f of child.filters) {
+      const it = makeItem(f, false); it.style.paddingLeft = (24 + depth * 16) + "px"; container.append(it);
+    }
+    renderTree(container, child, depth + 1, forceOpen);
+  }
+}
+function setAllCollapsed(collapse) {
+  state.collapsed.clear();
+  if (collapse) (function walk(n) { for (const c of n.children.values()) { if (c.children.size || c.filters.length) state.collapsed.add(c.path); walk(c); } })(buildTree(state.filters));
+  pref.set("collapsed", [...state.collapsed]); renderList();
+}
+
+function renderList() {
+  const list = $("#list"); list.textContent = "";
+  const vis = visibleFilters(), draggable = canDrag(), tree = isTree();
+  if (tree) {
+    // 搜尋時自動全部展開，才看得到結果
+    renderTree(list, buildTree(vis), 0, !!$("#search").value.trim());
+    // 讓目前選取的篩選器保持可見：若它所在的分支被收合，就不顯示（符合使用者的收合意圖）
+  } else for (const f of vis) list.append(makeItem(f, draggable));
+  $("#count").textContent = (vis.length === state.filters.length ? `共 ${state.filters.length} 個篩選器` : `顯示 ${vis.length} / ${state.filters.length}`)
+    + (state.filters.length > 1 && !tree ? (draggable ? "　｜　可拖曳調整順序" : "　｜　切回原始順序且清空搜尋才能拖曳") : "");
+  $("#btnApplySort").hidden = $("#sort").value === "file" || state.filters.length < 2;
+  $("#btnExpand").hidden = $("#btnCollapse").hidden = !tree;
+  const labels = [...new Set(state.filters.map(f => f.p.label).filter(Boolean))].sort();
+  $("#labelList").innerHTML = labels.map(l => `<option value="${esc(l)}">`).join("");
+}
+function makeItem(f, draggable) {
+    const d = document.createElement("div");
+    d.className = "item" + (f === state.selected ? " sel" : "");
+    const c = document.createElement("div"); c.className = "crit";
+    c.textContent = c.title = gmailQuery(f.p) || "(無條件)";
+    const a = document.createElement("div"); a.className = "acts";
+    const acts = summary(f);
+    for (const [cls, t] of acts) {
+      const s = document.createElement("span"); s.className = "chip " + cls; s.textContent = t;
+      if (cls === "label") s.insertAdjacentHTML("afterbegin", emo("tag"));
+      a.append(s);
+    }
+    a.title = acts.map(x => x[1]).join("　");
+    d.append(c, a);
+    d.onclick = () => { state.selected = f; render(); };
+    if (draggable) {
+      d.draggable = true;
+      d.ondragstart = e => { dragSrc = f; d.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("application/x-filter", ""); };
+      d.ondragend = () => { dragSrc = null; d.classList.remove("dragging"); clearDropMarks(); };
+      d.ondragover = e => {
+        if (!dragSrc || dragSrc === f) return;
+        e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move";
+        const after = e.offsetY > d.offsetHeight / 2;
+        clearDropMarks(); d.classList.add(after ? "drop-after" : "drop-before");
+      };
+      d.ondrop = e => {
+        if (!dragSrc || dragSrc === f) return;
+        e.preventDefault(); e.stopPropagation();
+        const after = d.classList.contains("drop-after"), arr = state.filters;
+        arr.splice(arr.indexOf(dragSrc), 1);
+        arr.splice(arr.indexOf(f) + (after ? 1 : 0), 0, dragSrc);
+        state.selected = dragSrc; dragSrc = null; setDirty(true); render();
+      };
+    }
+    return d;
+}
+function renderEditor() {
+  const pane = $("#editPane"), f = state.selected;
+  if (!f) { pane.innerHTML = '<div id="empty">' + (state.filters.length ? "從左側選擇一個篩選器進行編輯。" : "開啟 mailFilters.xml，或按 ＋ 從空白開始。") + "</div>"; return; }
+  pane.textContent = ""; pane.append($("#editorTpl").content.cloneNode(true));
+  pane.querySelectorAll("[data-k]").forEach(el => {
+    const k = el.dataset.k;
+    if (el.type === "checkbox") el.checked = f.p[k] === "true";
+    else el.value = f.p[k] ?? (k === "sizeOperator" ? "s_sl" : k === "sizeUnit" ? "s_smb" : "");
+    el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
+      if (el.type === "checkbox") { if (el.checked) f.p[k] = "true"; else delete f.p[k]; }
+      else if (el.value.trim() === "") delete f.p[k];
+      else f.p[k] = el.value.trim();
+      if (k === "shouldAlwaysMarkAsImportant" && el.checked) { delete f.p.shouldNeverMarkAsImportant; pane.querySelector('[data-k=shouldNeverMarkAsImportant]').checked = false; }
+      if (k === "shouldNeverMarkAsImportant" && el.checked) { delete f.p.shouldAlwaysMarkAsImportant; pane.querySelector('[data-k=shouldAlwaysMarkAsImportant]').checked = false; }
+      f.updated = ""; setDirty(true); updateQuery(); renderList();
+    });
+  });
+  updateQuery();
+  const idx = state.filters.indexOf(f);
+  $("#btnUp").disabled = idx <= 0; $("#btnDown").disabled = idx >= state.filters.length - 1;
+  $("#btnDup").onclick = () => { const c = newFilter(); c.p = { ...f.p }; c.extra = f.extra.map(x => [...x]); state.filters.splice(idx + 1, 0, c); state.selected = c; setDirty(true); render(); };
+  $("#btnDel").onclick = () => { if (!confirm("確定刪除此篩選器？")) return; state.filters.splice(idx, 1); state.selected = state.filters[idx] || state.filters[idx - 1] || null; setDirty(true); render(); };
+  $("#btnUp").onclick = () => move(idx, -1);
+  $("#btnDown").onclick = () => move(idx, 1);
+  $("#meta").textContent = "ID: " + f.id + (f.extra.length ? "　｜　其他保留屬性: " + f.extra.map(x => x[0]).join(", ") : "");
+}
+function move(i, d) { const a = state.filters; [a[i], a[i + d]] = [a[i + d], a[i]]; setDirty(true); render(); }
+function updateQuery() {
+  const f = state.selected, q = gmailQuery(f.p);
+  $("#query").textContent = q || "⚠ 尚未設定任何條件，Gmail 匯入時會略過此篩選器";
+}
+function render() {
+  renderList(); renderEditor();
+  $("#btnNew").disabled = false;
+  $("#btnSaveAs").disabled = false;
+  $("#btnSave").disabled = !(state.dirty || state.handle) ;
+}
+function setDirty(v) {
+  state.dirty = v;
+  const info = $("#fileInfo"); info.textContent = state.fileName + (state.handle ? "" : "（另存/下載儲存）");
+  if (v) { const s = document.createElement("span"); s.className = "dirty"; s.textContent = " ● 未儲存"; info.append(s); }
+  $("#btnSave").disabled = false;
+  document.title = (v ? "● " : "") + "Gmail 篩選器編輯器";
+}
+let toastTimer;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200); }
+
+/* ---------- 語法提示 ---------- */
+const TIPS = {
+  general: `<b>條件之間是 AND</b>：有填的欄位必須<b>全部</b>符合才會套用。
+    <ul><li>同一欄位要 OR：<code>a OR b</code>（OR 必須大寫）或 <code>{a b}</code></li>
+    <li>同一欄位要 AND：用空格隔開 <code>a b</code></li>
+    <li>排除：<code>-字詞</code>　完全比對：<code>"整句話"</code>　分組：<code>( )</code></li></ul>
+    <div class="note">要做「(A 且 B) 或 (C 且 D)」這種跨欄位組合，只能寫在「包含字詞」裡，例如 <code>{(from:a 扣款) (from:b 轉帳)}</code>。</div>`,
+  from: `寄件者地址，可填：
+    <ul><li>完整地址：<code>service@shop.com</code></li>
+    <li>整個網域：<code>@shop.com</code> 或 <code>*@shop.com</code></li>
+    <li>多個寄件者：<code>a@x.com OR b@y.com</code> 或 <code>{a@x.com b@y.com}</code></li>
+    <li>顯示名稱也可以比對：<code>蝦皮購物</code></li></ul>
+    <div class="note">⚠ 多個地址只用空格隔開會變成 AND，幾乎不會有信同時符合。</div>`,
+  to: `收件者（含 To / Cc），寫法同寄件者。
+    <ul><li>Gmail 別名分流：<code>you+shop@gmail.com</code></li>
+    <li>排除副本：改用「包含字詞」寫 <code>deliveredto:you@gmail.com</code></li></ul>`,
+  subject: `主旨的關鍵字（不分大小寫）。
+    <ul><li><code>出貨 通知</code>：兩個詞都要出現（AND，順序不拘）</li>
+    <li><code>"出貨通知"</code>：完整片語</li>
+    <li><code>出貨 OR 成立</code>：任一個出現即可</li>
+    <li><code>出貨 -取消</code>：有「出貨」但沒有「取消」</li></ul>
+    <div class="note">中文會自動斷詞，比對結果可能比預期寬，建議先在 Gmail 搜尋列試過。</div>`,
+  hasTheWord: `<b>完整的 Gmail 搜尋語法</b>，比對主旨＋內文，功能最強。
+    <ul><li>AND：空格　OR：<code>a OR b</code> / <code>{a b}</code>　排除：<code>-a</code></li>
+    <li>分組：<code>(a OR b) c</code>　片語：<code>"a b"</code></li>
+    <li>常用運算子：<code>from:</code> <code>to:</code> <code>subject:</code> <code>cc:</code> <code>list:</code> <code>has:attachment</code> <code>filename:pdf</code> <code>deliveredto:</code></li>
+    <li>跨欄位 OR：<code>{(from:a 扣款) (from:b 轉帳)}</code></li></ul>
+    <div class="note">⚠ <code>label:</code>、<code>in:</code>、<code>is:</code>、<code>older_than:</code> 這類看信件「目前狀態」的運算子，對新進信件通常不會生效。</div>`,
+  doesNotHaveTheWord: `任一個字詞出現，就<b>不</b>套用此篩選器。
+    <ul><li>多個字詞用空格：<code>廣告 電子報</code> = 兩者皆不能出現</li>
+    <li>也可用運算子：<code>from:noreply@x.com</code></li></ul>
+    <div class="note">Gmail 會轉成 <code>-{廣告 電子報}</code>。</div>`,
+  size: `依郵件大小（含附件）篩選，留空代表不限。
+    <ul><li>例如「大於 5 MB」= <code>larger:5M</code></li></ul>`,
+  actions: `符合條件時要執行的動作，可以複選。
+    <ul><li>「略過收件匣」= 封存，信不會出現在收件匣，但會留在標籤裡</li>
+    <li>「一律標示為重要」和「一律不標示為重要」只能二選一</li>
+    <li>多個篩選器同時符合時，<b>全部</b>都會執行（不是只跑第一個）</li></ul>`,
+  label: `要加上的標籤。
+    <ul><li>子標籤用 <code>/</code> 分隔：<code>00. root/05. 銀行/007. 第一銀行</code></li>
+    <li>一個篩選器只能套一個標籤；要加多個就建立多個篩選器</li>
+    <li>會自動完成已存在的標籤名稱</li></ul>`,
+  smartLabelToApply: `把信件歸到收件匣分頁（類別）：主要、社交網路、促銷內容、最新快訊、論壇。
+    <div class="note">只在 Gmail 有開啟分頁式收件匣時才看得到效果。</div>`,
+  forwardTo: `自動轉寄到另一個地址。
+    <div class="note">⚠ 該地址必須先在 Gmail「設定 → 轉寄和 POP/IMAP」新增並驗證過，否則匯入時會失敗。</div>`,
+};
+const tipBox = $("#tipBox");
+function showTip(el) {
+  const html = TIPS[el.dataset.tip]; if (!html) return;
+  tipBox.innerHTML = html; tipBox.classList.add("show");
+  const r = el.getBoundingClientRect(), b = tipBox.getBoundingClientRect();
+  let left = Math.min(Math.max(16, r.left - 8), innerWidth - b.width - 16);
+  let top = r.bottom + 8;
+  if (top + b.height > innerHeight - 8) top = Math.max(8, r.top - b.height - 8);
+  tipBox.style.left = left + "px"; tipBox.style.top = top + "px";
+}
+const hideTip = () => tipBox.classList.remove("show");
+document.addEventListener("mouseover", e => { const t = e.target.closest?.(".tip"); if (t) showTip(t); });
+document.addEventListener("mouseout", e => { if (e.target.closest?.(".tip")) hideTip(); });
+document.addEventListener("focusin", e => { if (e.target.classList?.contains("tip")) showTip(e.target); });
+document.addEventListener("focusout", e => { if (e.target.classList?.contains("tip")) hideTip(); });
+document.addEventListener("scroll", hideTip, true);
+
+/* ---------- 按鈕圖示（彩色 emoji） ---------- */
+const ICONS = {
+  open: "📂", save: "💾", saveAs: "📥", plus: "➕", funnel: "🔍", tag: "🏷️", tree: "🌳",
+  expand: "📖", collapse: "📕", sort: "🔃", copy: "📋", up: "⬆️", down: "⬇️", trash: "🗑️",
+};
+const emo = name => `<span class="emo" aria-hidden="true">${ICONS[name] || name}</span>`;
+const BTN_ICONS = { btnOpen: "open", btnSave: "save", btnSaveAs: "saveAs", btnNew: "plus", tglCrit: "funnel", tglActs: "tag",
+  tglTree: "tree", btnExpand: "expand", btnCollapse: "collapse", btnApplySort: "sort",
+  btnDup: "copy", btnUp: "up", btnDown: "down", btnDel: "trash" };
+// 編輯區按鈕在 <template> 裡，要一起處理
+for (const root of [document, $("#editorTpl").content])
+  for (const [id, name] of Object.entries(BTN_ICONS)) {
+    const b = root.querySelector("#" + id);
+    if (b) b.insertAdjacentHTML("afterbegin", emo(name));
+  }
+
+/* ---------- 深淺色主題：自動 → 淺色 → 深色 循環 ---------- */
+const THEMES = {
+  auto:  { next: "light", text: "自動", icon: "🖥️" },
+  light: { next: "dark",  text: "淺色", icon: "☀️" },
+  dark:  { next: "auto",  text: "深色", icon: "🌙" },
+};
+function applyTheme(t) {
+  if (!THEMES[t]) t = "auto";
+  if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const b = $("#btnTheme"), th = THEMES[t];
+  b.innerHTML = emo(th.icon) + th.text;
+  b.title = `主題：${th.text}（點擊切換為${THEMES[th.next].text}）`;
+  return t;
+}
+let theme = applyTheme(pref.get("theme", "auto"));
+$("#btnTheme").onclick = () => { theme = applyTheme(THEMES[theme].next); pref.set("theme", theme); };
+
+/* ---------- 事件 ---------- */
+$("#btnOpen").onclick = openFile;
+$("#btnSave").onclick = save;
+$("#btnSaveAs").onclick = saveAs;
+$("#btnNew").onclick = () => { const f = newFilter(); state.filters.push(f); state.selected = f; setDirty(true); render(); $("#editPane input[data-k=from]")?.focus(); };
+$("#btnNew").disabled = false;
+$("#search").oninput = renderList;
+$("#sort").onchange = renderList;
+$("#btnApplySort").onclick = () => {
+  const name = $("#sort").selectedOptions[0].textContent;
+  if (!confirm(`把所有篩選器（含搜尋未顯示的）依「${name}」重新排列，寫入原始順序？\n存檔後才會寫回檔案。`)) return;
+  state.filters = sortFilters(state.filters, $("#sort").value);
+  $("#sort").value = "file"; setDirty(true); render(); toast(`已依${name}重新排列原始順序`);
+};
+
+function bindToggle(btn, cls) {
+  const apply = on => { btn.setAttribute("aria-pressed", on); $("#list").classList.toggle(cls, on); };
+  apply(pref.get(cls, false));
+  btn.onclick = () => { const on = btn.getAttribute("aria-pressed") !== "true"; apply(on); pref.set(cls, on); };
+}
+bindToggle($("#tglCrit"), "oneline-crit");
+bindToggle($("#tglActs"), "oneline-acts");
+state.collapsed = new Set(pref.get("collapsed", []));
+bindToggle($("#tglTree"), "tree");
+$("#tglTree").addEventListener("click", renderList);
+$("#btnExpand").onclick = () => setAllCollapsed(false);
+$("#btnCollapse").onclick = () => setAllCollapsed(true);
+renderList();
+
+/* ---------- 左右分隔線拖動 ---------- */
+const DEFAULT_W = 380;
+function setListW(w) {
+  w = Math.round(Math.min(Math.max(w, 220), Math.max(220, innerWidth - 320)));
+  document.querySelector("main").style.setProperty("--listW", w + "px");
+  return w;
+}
+setListW(pref.get("listW", DEFAULT_W));
+const splitter = $("#splitter");
+splitter.addEventListener("pointerdown", e => {
+  e.preventDefault(); try { splitter.setPointerCapture(e.pointerId); } catch {} document.body.classList.add("resizing");
+  const left = document.querySelector("main").getBoundingClientRect().left;
+  const onMove = ev => setListW(ev.clientX - left);
+  const onUp = ev => {
+    splitter.removeEventListener("pointermove", onMove); splitter.removeEventListener("pointerup", onUp);
+    document.body.classList.remove("resizing"); pref.set("listW", setListW(ev.clientX - left));
+  };
+  splitter.addEventListener("pointermove", onMove); splitter.addEventListener("pointerup", onUp);
+});
+splitter.ondblclick = () => pref.set("listW", setListW(DEFAULT_W));
+window.addEventListener("resize", () => setListW(pref.get("listW", DEFAULT_W)));
+$("#fileInput").onchange = async e => { const file = e.target.files[0]; if (file) loadText(await file.text(), file.name, null); e.target.value = ""; };
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (state.filters.length || state.dirty) (e.shiftKey ? saveAs : save)(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") { e.preventDefault(); openFile(); }
+});
+window.addEventListener("beforeunload", e => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
+// 整個視窗的拖放只處理「從外部拖進來的檔案」，清單內拖曳排序不會觸發
+const isFileDrag = e => [...(e.dataTransfer?.types || [])].includes("Files");
+let dragDepth = 0;
+window.addEventListener("dragenter", e => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
+window.addEventListener("dragleave", e => { if (!isFileDrag(e)) return; if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+window.addEventListener("dragover", e => { if (isFileDrag(e)) e.preventDefault(); });
+window.addEventListener("drop", async e => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
+  if (state.dirty && !confirm("目前有未儲存的變更，確定要載入新檔案？")) return;
+  const item = e.dataTransfer.items?.[0];
+  let handle = null;
+  if (item?.getAsFileSystemHandle) { try { const h = await item.getAsFileSystemHandle(); if (h?.kind === "file") handle = h; } catch {} }
+  const file = handle ? await handle.getFile() : e.dataTransfer.files[0];
+  if (file) loadText(await file.text(), file.name, handle);
+});
+</script>
+</body>
+</html>
